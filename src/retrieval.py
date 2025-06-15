@@ -1,0 +1,70 @@
+import logging
+import os
+import uuid
+from typing import List
+
+from dotenv import load_dotenv
+from langchain.retrievers import MultiVectorRetriever
+from langchain.storage import InMemoryStore
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+from src.document_processing import ProcessedDocument
+
+logger = logging.getLogger(__name__)
+
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+class MultimodalRetriever:
+    def __init__(self):
+        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GEMINI_API_KEY)
+        self.retriever = None
+        self.child_docs = []
+        self.parent_docs = {}
+
+    def add_documents(self, processed_doc: ProcessedDocument):
+        """Adds a processed document, creating parent-child links."""
+        parent_doc_id = processed_doc.doc_id
+        parent_content = processed_doc.full_text if processed_doc.full_text else " ".join([c.page_content for c in processed_doc.text_chunks])
+        parent_document = Document(
+            page_content=parent_content,
+            metadata={'doc_id': parent_doc_id, 'source': processed_doc.metadata.get('source', 'Unknown')}
+        )
+        self.parent_docs[parent_doc_id] = parent_document
+
+        for chunk in processed_doc.text_chunks:
+            chunk.metadata['doc_id'] = parent_doc_id
+            self.child_docs.append(chunk)
+
+        for img in processed_doc.images:
+            summary_doc = Document(
+                page_content=img['caption'],
+                metadata={'doc_id': parent_doc_id, 'source': processed_doc.metadata.get('source', 'Unknown'), 'image_path': img['path']}
+            )
+            self.child_docs.append(summary_doc)
+
+    def build_index(self):
+        """Builds the FAISS index and MultiVectorRetriever from all added documents."""
+        if not self.child_docs:
+            logger.warning("No documents to index.")
+            return
+
+        vectorstore = FAISS.from_documents(documents=self.child_docs, embedding=self.embeddings)
+        store = InMemoryStore()
+        store.mset(list(self.parent_docs.items()))
+
+        self.retriever = MultiVectorRetriever(
+            vectorstore=vectorstore,
+            docstore=store,
+            id_key="doc_id",
+        )
+
+    def retrieve(self, query: str, k: int = 5) -> List[Document]:
+        """Retrieve relevant documents using the multi-vector retriever."""
+        if not self.retriever:
+            logger.warning("Retriever not built yet. Call build_index() first.")
+            return []
+        
+        return self.retriever.get_relevant_documents(query, n_results=k)
