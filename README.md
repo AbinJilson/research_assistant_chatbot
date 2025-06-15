@@ -25,7 +25,7 @@ To get the Research Assistant up and running on your local machine, follow these
 1. **Clone the repository (or download the source code):**
    ```bash
    git clone https://github.com/AbinJilson/research_assistant_chatbot/
-   cd https://github.com/AbinJilson/research_assistant_chatbot/
+   cd research_assistant_chatbot
    ```
 
 2. **Create and activate a virtual environment:**
