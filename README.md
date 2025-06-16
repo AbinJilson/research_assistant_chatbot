@@ -62,15 +62,15 @@ The Research Assistant is built on a modular, component-based architecture that 
 
 - **`app.py` (User Interface):** The main entry point of the application, built with Streamlit. It handles user interactions, file uploads, and the overall layout of the web interface.
 
-- **`src/assistant.py` (Orchestrator):** The `MultimodalResearchAssistant` class acts as the central orchestrator. It initializes and coordinates all the other components, managing the flow of data from document processing to question answering.
+- **`src/assistant_logic.py` (Orchestrator):** The `MultimodalResearchAssistant` class acts as the central orchestrator. It initializes and coordinates all the other components, managing the flow of data from document processing to question answering.
 
-- **`src/document_processor.py` (Content Processing):** This module is responsible for parsing and processing input documents. It uses `PyMuPDF` to extract text and images from PDFs and `BeautifulSoup` (or `crawl4ai` if available) to scrape content from web pages. It also uses LangChain's `RecursiveCharacterTextSplitter` to break down large texts into manageable chunks.
+- **`src/document_processing.py` (Content Processing):** This module is responsible for parsing and processing input documents. It uses `PyMuPDF` to extract text and images from PDFs and `BeautifulSoup` to scrape content from web pages. It also uses LangChain's `RecursiveCharacterTextSplitter` to break down large texts into manageable chunks.
 
-- **`src/image_processor.py` (Image Analysis):** The `ImageProcessor` class uses the Gemini Vision model to generate detailed captions for the images extracted from documents. This allows the assistant to understand and answer questions about the visual content.
+- **`src/retrieval.py` (Information Retrieval):** The `MultimodalRetriever` class manages the information retrieval pipeline. It uses a `MultiVectorRetriever` from LangChain, with a FAISS vector store for efficient similarity searches and an in-memory store for the original documents. It creates embeddings for both text chunks and image captions, enabling true multimodal retrieval.
 
-- **`src/retriever.py` (Information Retrieval):** The `MultimodalRetriever` class manages the information retrieval pipeline. It uses a `MultiVectorRetriever` from LangChain, with a FAISS vector store for efficient similarity searches and an in-memory store for the original documents. It creates embeddings for both text chunks and image captions, enabling true multimodal retrieval.
+- **`src/scraper.py` (Web Scraping):** This module handles the scraping of web pages. It uses `BeautifulSoup` and `requests` to fetch and parse HTML content from URLs.
 
-- **`src/data_models.py` (Data Structures):** This file defines the `ProcessedDocument` dataclass, which provides a standardized structure for storing the text, images, and metadata extracted from each document.
+- **`src/utils.py` (Utility Functions):** This file contains helper functions and utilities that are used across the application, such as running asynchronous tasks in a separate thread.
 
 ## Limitations
 
@@ -97,4 +97,3 @@ For a complete list of dependencies, please see the `requirements.txt` file.
 - **Improved Caching:** Implement more sophisticated caching mechanisms to speed up the processing of previously seen documents.
 - **Advanced Chat History:** Allow users to have persistent conversations and refer back to previous questions and answers.
 - **Batch Processing:** Enable users to upload and process multiple documents at once in a more streamlined manner.
-
