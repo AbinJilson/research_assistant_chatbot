@@ -19,3 +19,4 @@ pi-heif
 unstructured-inference
 pdf2image
 numpy
+playwright

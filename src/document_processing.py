@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List
+import requests
+from urllib.parse import urljoin
+import mimetypes
 
 import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
@@ -117,14 +120,56 @@ class DocumentProcessor:
         )
 
     def process_html(self, content: str, url: str) -> ProcessedDocument:
+        """Processes HTML content, extracting text and images."""
         soup = BeautifulSoup(content, 'html.parser')
-        text = soup.get_text(separator='\n', strip=True)
         doc_id = str(uuid.uuid4())
+        temp_dir = Path(tempfile.mkdtemp(prefix=f"html_{doc_id}_"))
+        images = []
+
+        # Find, download, and save images
+        for img_tag in soup.find_all('img'):
+            img_src = img_tag.get('src')
+            if not img_src:
+                continue
+
+            try:
+                img_url = urljoin(url, img_src)
+                response = requests.get(img_url, stream=True, timeout=15)
+                response.raise_for_status()
+
+                content_type = response.headers.get('content-type')
+                ext = mimetypes.guess_extension(content_type) if content_type else Path(img_url).suffix
+                if not ext:
+                    ext = '.jpg'  # Default extension
+
+                image_path = temp_dir / f"img_{len(images) + 1}{ext}"
+                with open(image_path, "wb") as f:
+                    for chunk in response.iter_content(8192):
+                        f.write(chunk)
+                
+                images.append({"path": str(image_path), "page": 1, "caption": ""})
+
+            except requests.RequestException as e:
+                logger.warning(f"Could not download image {img_src} from {url}: {e}")
+            except Exception as e:
+                logger.error(f"An unexpected error occurred while processing an image from {url}: {e}")
+
+        # Extract text and create chunks
+        text = soup.get_text(separator='\n', strip=True)
         text_chunks = [Document(page_content=chunk, metadata={"doc_id": doc_id, "source": url}) for chunk in self.text_splitter.split_text(text)]
+
+        # Generate captions for downloaded images
+        for img in images:
+            context = text[:1500]  # Use the beginning of the article as context
+            img["caption"] = self.image_processor.generate_image_caption(
+                img["path"], 
+                context=f"This image is from the webpage {url}. Context from the page: {context}"
+            )
+
         return ProcessedDocument(
             doc_id=doc_id,
             text_chunks=text_chunks,
-            images=[],
+            images=images,
             metadata={"source": url, "type": "html"},
             full_text=text
         )

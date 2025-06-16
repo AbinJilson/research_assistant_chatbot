@@ -1,7 +1,13 @@
 import logging
 import os
 import tempfile
+import asyncio
+import platform
 from pathlib import Path
+
+# Set Windows event loop policy if on Windows
+if platform.system() == "Windows":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import streamlit as st
 from dotenv import load_dotenv

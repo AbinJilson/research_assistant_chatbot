@@ -2,6 +2,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
+import asyncio
 
 import requests
 import streamlit as st
@@ -53,37 +54,79 @@ class MultimodalResearchAssistant:
             else:
                 st.error(f"Failed to process {Path(file_path).name}")
 
+    async def process_url_async(self, url: str):
+        """Process a URL asynchronously and add its content to the knowledge base"""
+        if not url or not isinstance(url, str) or not url.startswith(('http://', 'https://')):
+            logger.error(f"Invalid URL: {url}")
+            return False
+            
+        try:
+            # Use the async web scraper
+            content = await self.web_scraper.scrape(url)
+            if not content:
+                logger.error(f"Failed to scrape content from {url}")
+                return False
+                
+            # Process the scraped content directly
+            processed_doc = await asyncio.to_thread(
+                self.doc_processor.process_html,
+                content,
+                url
+            )
+            
+            if processed_doc:
+                self.processed_docs.append(processed_doc)
+                self.retriever.add_documents(processed_doc)
+                return True
+            else:
+                logger.error(f"Failed to process HTML content from {url}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error processing URL {url}: {e}")
+            return False
+                    
+        return False
+
     def add_url(self, url: str):
         """Add a web URL or a direct PDF link to the system."""
         with st.spinner(f"Scraping and processing {url}..."):
             try:
-                response = requests.head(url, allow_redirects=True, timeout=10)
-                content_type = response.headers.get('Content-Type', '')
-
-                if 'application/pdf' in content_type:
-                    # It's a direct link to a PDF
-                    pdf_response = requests.get(url, timeout=30)
-                    pdf_response.raise_for_status()
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="url_") as temp_file:
-                        temp_file.write(pdf_response.content)
+                # Check if it's a PDF URL
+                if url.lower().endswith('.pdf'):
+                    # Download the PDF to a temporary file
+                    response = requests.get(url, stream=True)
+                    response.raise_for_status()
+                    
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                temp_file.write(chunk)
                         temp_file_path = temp_file.name
-                    self.temp_files.append(temp_file_path)
+                    
+                    # Add the downloaded PDF
                     self.add_pdf(temp_file_path)
                 else:
                     # It's a web page
-                    html_content = run_async_in_thread(self.web_scraper.scrape(url))
-                    if html_content:
-                        processed_doc = self.doc_processor.process_html(html_content, url)
-                        self.processed_docs.append(processed_doc)
-                        self.retriever.add_documents(processed_doc)
-                        self._build_full_index()
-                        st.success(f"✅ Successfully scraped and indexed {url}")
-                    else:
-                        st.error(f"Failed to scrape content from {url}")
+                    st.write("Processing URL asynchronously...")
+                    try:
+                        # Use asyncio.run() to run the async function
+                        result = asyncio.run(self.process_url_async(url))
+                        if result:
+                            self._build_full_index()
+                            st.success(f"✅ Successfully scraped and indexed {url}")
+                        else:
+                            st.error(f"❌ Failed to process {url}")
+                    except Exception as e:
+                        logger.error(f"Error processing URL {url}: {e}")
+                        st.error(f"Error processing URL: {str(e)}")
+                        
             except requests.RequestException as e:
-                st.error(f"Error fetching URL: {e}")
+                logger.error(f"Error downloading {url}: {e}")
+                st.error(f"Error downloading {url}: {str(e)}")
             except Exception as e:
-                st.error(f"An unexpected error occurred: {e}")
+                logger.error(f"Unexpected error processing {url}: {e}")
+                st.error(f"An unexpected error occurred while processing {url}")
 
     def query(self, question: str):
         """Query the research assistant"""

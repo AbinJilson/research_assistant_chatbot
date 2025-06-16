@@ -67,4 +67,8 @@ class MultimodalRetriever:
             logger.warning("Retriever not built yet. Call build_index() first.")
             return []
         
-        return self.retriever.get_relevant_documents(query, n_results=k)
+        # The `get_relevant_documents` method is deprecated. The new `invoke` method
+        # is recommended but doesn't accept `k` directly. We pass it via `search_kwargs`.
+        # This also fixes a likely bug where the `k` argument was previously ignored.
+        self.retriever.search_kwargs = {'k': k}
+        return self.retriever.invoke(query)
