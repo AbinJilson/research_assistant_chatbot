@@ -55,7 +55,15 @@ class ImageProcessor:
             with open(image_path, "rb") as img_file:
                 img_bytes = img_file.read()
             encoded_image = base64.b64encode(img_bytes).decode("utf-8")
-            prompt = f"Analyze this image and provide a detailed description. {context}"
+            prompt = (
+                "You are an expert research assistant. Analyze the following image from a research paper.\n\n"
+                "1. **Summarize the main finding:** What is the key takeaway or conclusion presented in this image?\n"
+                "2. **Extract key data:** If it's a graph or chart, what are the labels on the axes? What are the units? What are the most important data points or trends?\n"
+                "3. **Describe the components:** If it's a diagram or flowchart, describe the different parts and how they are connected.\n"
+                f"4. **Consider the context:** {context} Use this context to provide a more in-depth analysis of the image's significance.\n"
+                "5. **Infer the researcher's intent:** What message or point is the researcher trying to convey with this image? How does it support the paper's main arguments?"
+                "6.Provide the analysis directly, without any introductory phrases (e.g., 'Here's an analysis...').\n\n"
+            )
             message = HumanMessage(
                 content=[
                     {"type": "text", "text": prompt},
