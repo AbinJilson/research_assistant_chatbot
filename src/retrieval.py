@@ -1,8 +1,11 @@
 import logging
 import os
 import uuid
-from typing import List
+import warnings
+from typing import List, Optional
 
+import torch
+import numpy as np
 from dotenv import load_dotenv
 from langchain.retrievers import MultiVectorRetriever
 from langchain.storage import InMemoryStore
@@ -12,17 +15,63 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 from src.document_processing import ProcessedDocument
 
+# Suppress GPU Faiss warning - we're using CPU version with GPU acceleration
+warnings.filterwarnings("ignore", message="Failed to load GPU Faiss")
+
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 class MultimodalRetriever:
-    def __init__(self):
+    def __init__(self, use_gpu: bool = True):
+        """
+        Initialize the multimodal retriever with optional GPU acceleration.
+        
+        Args:
+            use_gpu: Whether to use GPU acceleration for similarity search
+        """
         self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GEMINI_API_KEY)
         self.retriever = None
         self.child_docs = []
         self.parent_docs = {}
+        self.use_gpu = use_gpu and torch.cuda.is_available()
+        
+        if self.use_gpu:
+            logger.info(f"GPU acceleration enabled. Using device: {torch.cuda.get_device_name(0)}")
+        else:
+            logger.info("GPU acceleration disabled. Using CPU.")
+    
+    def _get_device(self) -> torch.device:
+        """Get the appropriate device for tensor operations."""
+        return torch.device('cuda' if self.use_gpu else 'cpu')
+    
+    def _compute_similarity_gpu(self, query_embedding: np.ndarray, doc_embeddings: np.ndarray) -> np.ndarray:
+        """
+        Compute cosine similarity using GPU acceleration.
+        
+        Args:
+            query_embedding: Query embedding vector
+            doc_embeddings: Document embedding vectors
+            
+        Returns:
+            Similarity scores
+        """
+        device = self._get_device()
+        
+        # Convert to PyTorch tensors and move to GPU
+        query_tensor = torch.tensor(query_embedding, dtype=torch.float32, device=device)
+        doc_tensor = torch.tensor(doc_embeddings, dtype=torch.float32, device=device)
+        
+        # Normalize vectors for cosine similarity
+        query_norm = torch.nn.functional.normalize(query_tensor, p=2, dim=0)
+        doc_norm = torch.nn.functional.normalize(doc_tensor, p=2, dim=1)
+        
+        # Compute cosine similarity
+        similarity = torch.mm(doc_norm, query_norm.unsqueeze(1)).squeeze(1)
+        
+        # Move result back to CPU and convert to numpy
+        return similarity.cpu().numpy()
 
     def add_documents(self, processed_doc: ProcessedDocument):
         """Adds a processed document, creating parent-child links."""
@@ -72,3 +121,36 @@ class MultimodalRetriever:
         # This also fixes a likely bug where the `k` argument was previously ignored.
         self.retriever.search_kwargs = {'k': k}
         return self.retriever.invoke(query)
+    
+    def retrieve_with_gpu_acceleration(self, query: str, k: int = 5) -> List[Document]:
+        """
+        Retrieve documents with GPU-accelerated similarity search.
+        This method provides GPU acceleration for the similarity computation.
+        """
+        if not self.retriever:
+            logger.warning("Retriever not built yet. Call build_index() first.")
+            return []
+        
+        # Get query embedding
+        query_embedding = self.embeddings.embed_query(query)
+        
+        # Get all document embeddings
+        doc_texts = [doc.page_content for doc in self.child_docs]
+        doc_embeddings = self.embeddings.embed_documents(doc_texts)
+        
+        # Compute similarities using GPU acceleration
+        similarities = self._compute_similarity_gpu(query_embedding, np.array(doc_embeddings))
+        
+        # Get top-k indices
+        top_indices = np.argsort(similarities)[::-1][:k]
+        
+        # Retrieve documents
+        results = []
+        for idx in top_indices:
+            doc = self.child_docs[idx]
+            # Get parent document
+            parent_doc_id = doc.metadata.get('doc_id')
+            if parent_doc_id in self.parent_docs:
+                results.append(self.parent_docs[parent_doc_id])
+        
+        return results
