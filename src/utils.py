@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import os
+import re
 import stat
 import threading
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -66,3 +68,51 @@ def run_async_in_thread(coro):
     if exception:
         raise exception
     return result
+
+def custom_clean_text(text: str) -> str:
+    """Cleans text by applying a series of cleaning functions from RAG implementation."""
+    # Basic cleaning steps (expand as needed)
+    text = re.sub(r'[^\x00-\x7F]+', ' ', text)  # Remove non-ASCII
+    text = re.sub(r'\s+', ' ', text)  # Collapse whitespace
+    text = text.strip()
+    return text
+
+
+def split_into_sentences(text: str, tokenizer, min_tokens: int = 30, max_tokens: int = 384, nlp=None) -> List[str]:
+    """Splits text into sentences respecting token limits using a tokenizer and optional spaCy nlp."""
+    if nlp is None:
+        # Fallback: simple split by period
+        raw_sentences = text.split('.')
+    else:
+        doc = nlp(text)
+        raw_sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+
+    def get_token_length(segment: str) -> int:
+        return len(tokenizer.encode(segment)) - 2 if hasattr(tokenizer, 'encode') else len(segment.split())
+
+    sentences = []
+    current_chunk = []
+    current_length = 0
+    for sentence in raw_sentences:
+        if get_token_length(sentence) < min_tokens:
+            continue
+        sentence_tokens = get_token_length(sentence)
+        if sentence_tokens > max_tokens:
+            # Split long sentence
+            words = sentence.split()
+            for i in range(0, len(words), max_tokens):
+                chunk = ' '.join(words[i:i+max_tokens])
+                if get_token_length(chunk) >= min_tokens:
+                    sentences.append(chunk)
+            continue
+        if current_length + sentence_tokens > max_tokens:
+            if current_chunk:
+                sentences.append(' '.join(current_chunk))
+            current_chunk = [sentence]
+            current_length = sentence_tokens
+        else:
+            current_chunk.append(sentence)
+            current_length += sentence_tokens
+    if current_chunk and get_token_length(' '.join(current_chunk)) >= min_tokens:
+        sentences.append(' '.join(current_chunk))
+    return sentences
