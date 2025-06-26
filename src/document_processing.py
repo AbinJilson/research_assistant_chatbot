@@ -21,7 +21,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import ChatGoogleGenerativeAI
 from PIL import Image
 
-from src.utils import _import_image_dependencies, on_rm_error, cv2, np
+from src.utils import _import_image_dependencies, on_rm_error, cv2, np, custom_clean_text, split_into_sentences
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +82,11 @@ class ImageProcessor:
 
 
 class DocumentProcessor:
-    def __init__(self, image_processor: ImageProcessor):
+    def __init__(self, image_processor: ImageProcessor, tokenizer=None, nlp=None):
         self.image_processor = image_processor
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        self.tokenizer = tokenizer
+        self.nlp = nlp
 
     def process_pdf(self, file_path: str) -> ProcessedDocument:
         doc_id = str(uuid.uuid4())
@@ -113,7 +115,14 @@ class DocumentProcessor:
             shutil.rmtree(temp_dir, onerror=on_rm_error)
             return ProcessedDocument(doc_id=doc_id, text_chunks=[], images=[], metadata={}, full_text="")
 
-        text_chunks = [Document(page_content=chunk, metadata={"doc_id": doc_id, "source": file_path}) for chunk in self.text_splitter.split_text(full_text)]
+        # Clean text before chunking
+        cleaned_text = custom_clean_text(full_text)
+        # Optionally use semantic chunking if tokenizer and nlp are provided
+        if self.tokenizer and self.nlp:
+            chunks = split_into_sentences(cleaned_text, self.tokenizer, nlp=self.nlp)
+            text_chunks = [Document(page_content=chunk, metadata={"doc_id": doc_id, "source": file_path}) for chunk in chunks]
+        else:
+            text_chunks = [Document(page_content=chunk, metadata={"doc_id": doc_id, "source": file_path}) for chunk in self.text_splitter.split_text(cleaned_text)]
 
         for img in images:
             context = "\n".join([chunk.page_content for chunk in text_chunks if Path(chunk.metadata['source']).name == Path(file_path).name])
@@ -124,7 +133,7 @@ class DocumentProcessor:
             text_chunks=text_chunks,
             images=images,
             metadata={"source": file_path, "type": "pdf"},
-            full_text=full_text
+            full_text=cleaned_text
         )
 
     def process_html(self, content: str, url: str) -> ProcessedDocument:
@@ -139,36 +148,37 @@ class DocumentProcessor:
             img_src = img_tag.get('src')
             if not img_src:
                 continue
-
             try:
                 img_url = urljoin(url, img_src)
                 response = requests.get(img_url, stream=True, timeout=15)
                 response.raise_for_status()
-
                 content_type = response.headers.get('content-type')
                 ext = mimetypes.guess_extension(content_type) if content_type else Path(img_url).suffix
                 if not ext:
                     ext = '.jpg'  # Default extension
-
                 image_path = temp_dir / f"img_{len(images) + 1}{ext}"
                 with open(image_path, "wb") as f:
                     for chunk in response.iter_content(8192):
                         f.write(chunk)
-                
                 images.append({"path": str(image_path), "page": 1, "caption": ""})
-
             except requests.RequestException as e:
                 logger.warning(f"Could not download image {img_src} from {url}: {e}")
             except Exception as e:
                 logger.error(f"An unexpected error occurred while processing an image from {url}: {e}")
 
-        # Extract text and create chunks
+        # Extract and clean text
         text = soup.get_text(separator='\n', strip=True)
-        text_chunks = [Document(page_content=chunk, metadata={"doc_id": doc_id, "source": url}) for chunk in self.text_splitter.split_text(text)]
+        cleaned_text = custom_clean_text(text)
+        # Optionally use semantic chunking if tokenizer and nlp are provided
+        if self.tokenizer and self.nlp:
+            chunks = split_into_sentences(cleaned_text, self.tokenizer, nlp=self.nlp)
+            text_chunks = [Document(page_content=chunk, metadata={"doc_id": doc_id, "source": url}) for chunk in chunks]
+        else:
+            text_chunks = [Document(page_content=chunk, metadata={"doc_id": doc_id, "source": url}) for chunk in self.text_splitter.split_text(cleaned_text)]
 
         # Generate captions for downloaded images
         for img in images:
-            context = text[:1500]  # Use the beginning of the article as context
+            context = cleaned_text[:1500]  # Use the beginning of the article as context
             img["caption"] = self.image_processor.generate_image_caption(
                 img["path"], 
                 context=f"This image is from the webpage {url}. Context from the page: {context}"
@@ -179,5 +189,5 @@ class DocumentProcessor:
             text_chunks=text_chunks,
             images=images,
             metadata={"source": url, "type": "html"},
-            full_text=text
+            full_text=cleaned_text
         )
