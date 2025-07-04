@@ -5,7 +5,7 @@ faiss-cpu
 unstructured 
 PyMuPDF 
 opencv-python 
-pillow 
+pillow
 python-dotenv
 easyocr
 crawl4ai 
